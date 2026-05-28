@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  qa-build-deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -30,11 +30,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
+      - name: Run QA
+        run: npm run qa
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -44,13 +41,9 @@ jobs:
         with:
           path: ./dist
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        environment:
+          name: github-pages
+          url: ${{ steps.deployment.outputs.page_url }}
