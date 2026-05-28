@@ -9,6 +9,8 @@ type ApiKeyMeta = { accessLevel: string; selections: string[]; validatedAt: stri
 type AuditEvent = { id: string; time: string; type: string; message: string };
 type CooldownSnapshot = { id: string; time: string; cooldowns: unknown; bars: unknown };
 type ProfileSnapshot = { id: string; time: string; basic: unknown; education: unknown; personalStats: unknown };
+type TravelStateSnapshot = { id: string; time: string; travel: unknown };
+type SavedTravelPlan = { id: string; time: string; destination: string; capacity: number; buyPrice: number; sellPrice: number; stayMinutes: number; profit: number; profitPerHour: number };
 
 type ModuleConfig = {
   en: string;
@@ -17,15 +19,38 @@ type ModuleConfig = {
   ready: boolean;
 };
 
+type TravelDestination = {
+  id: string;
+  en: string;
+  es: string;
+  minutesEachWay: number;
+  noteEn: string;
+  noteEs: string;
+};
+
 const modules: ModuleConfig[] = [
   { en: "Overview", es: "Resumen", scopes: "public", ready: true },
   { en: "Cooldowns", es: "Cooldowns", scopes: "minimal: user/cooldowns, user/bars", ready: true },
   { en: "Profile", es: "Perfil", scopes: "public/minimal: user/basic, user/education, user/personalstats", ready: true },
-  { en: "Travel", es: "Viajes", scopes: "public/minimal: user/travel + public market data", ready: false },
+  { en: "Travel", es: "Viajes", scopes: "public/minimal: manual profit model + optional user/travel", ready: true },
   { en: "Market", es: "Mercado", scopes: "public: market and item endpoints", ready: false },
   { en: "Networth", es: "Networth", scopes: "limited/custom: user/networth", ready: false },
   { en: "History", es: "Historial", scopes: "browser storage, 30-day local retention", ready: true },
   { en: "Settings", es: "Ajustes", scopes: "none", ready: true }
+];
+
+const travelDestinations: TravelDestination[] = [
+  { id: "mexico", en: "Mexico", es: "Mexico", minutesEachWay: 18, noteEn: "Fast route; useful when short on time.", noteEs: "Ruta rapida; util con poco tiempo." },
+  { id: "cayman", en: "Cayman Islands", es: "Islas Caiman", minutesEachWay: 35, noteEn: "Short trip; compare profit per hour carefully.", noteEs: "Viaje corto; compara beneficio por hora." },
+  { id: "canada", en: "Canada", es: "Canada", minutesEachWay: 41, noteEn: "Mid-short route for quick cycles.", noteEs: "Ruta media-corta para ciclos rapidos." },
+  { id: "hawaii", en: "Hawaii", es: "Hawaii", minutesEachWay: 94, noteEn: "Longer route; better if margin is high.", noteEs: "Ruta mas larga; mejor si el margen es alto." },
+  { id: "uk", en: "United Kingdom", es: "Reino Unido", minutesEachWay: 111, noteEn: "Long route; good for fewer check-ins.", noteEs: "Ruta larga; util para menos actividad." },
+  { id: "argentina", en: "Argentina", es: "Argentina", minutesEachWay: 117, noteEn: "Long route; compare against travel cooldown timing.", noteEs: "Ruta larga; compara con tus cooldowns." },
+  { id: "switzerland", en: "Switzerland", es: "Suiza", minutesEachWay: 123, noteEn: "Long route; often used for high-value planning.", noteEs: "Ruta larga; usada para planificacion de alto valor." },
+  { id: "japan", en: "Japan", es: "Japon", minutesEachWay: 158, noteEn: "Very long route; prioritize high margin.", noteEs: "Ruta muy larga; prioriza margen alto." },
+  { id: "china", en: "China", es: "China", minutesEachWay: 169, noteEn: "Very long route; lower activity requirement.", noteEs: "Ruta muy larga; requiere menos actividad." },
+  { id: "uae", en: "United Arab Emirates", es: "Emiratos Arabes", minutesEachWay: 190, noteEn: "Very long route; plan around cooldowns.", noteEs: "Ruta muy larga; planifica alrededor de cooldowns." },
+  { id: "south-africa", en: "South Africa", es: "Sudafrica", minutesEachWay: 208, noteEn: "Longest preset route; only worth it with strong margins.", noteEs: "Ruta preset mas larga; solo compensa con buen margen." }
 ];
 
 function loadJson<T>(key: string, fallback: T): T {
@@ -119,6 +144,10 @@ function formatSeconds(seconds: number): string {
   if (hours > 0) return `${hours}h ${minutes}m`;
   if (minutes > 0) return `${minutes}m ${secs}s`;
   return `${secs}s`;
+}
+
+function money(value: number): string {
+  return `$${Math.round(value).toLocaleString()}`;
 }
 
 function extractNestedRecord(data: unknown, key: string): Record<string, unknown> {
@@ -219,6 +248,23 @@ function saveProfileSnapshot(basic: unknown, education: unknown, personalStats: 
   return next;
 }
 
+function saveTravelStateSnapshot(travel: unknown): TravelStateSnapshot[] {
+  const snapshots = loadJson<TravelStateSnapshot[]>("tornapps:travelStateSnapshots", []);
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const next = [{ id: crypto.randomUUID(), time: new Date().toISOString(), travel }, ...snapshots]
+    .filter((snapshot) => new Date(snapshot.time).getTime() >= cutoff)
+    .slice(0, 100);
+  saveJson("tornapps:travelStateSnapshots", next);
+  return next;
+}
+
+function saveTravelPlan(plan: SavedTravelPlan): SavedTravelPlan[] {
+  const plans = loadJson<SavedTravelPlan[]>("tornapps:travelPlans", []);
+  const next = [plan, ...plans].slice(0, 50);
+  saveJson("tornapps:travelPlans", next);
+  return next;
+}
+
 function App() {
   const [locale, setLocale] = useState<Locale>((localStorage.getItem("tornapps:locale") as Locale) || "en");
   const [unlocked, setUnlocked] = useState(false);
@@ -239,11 +285,26 @@ function App() {
   const [education, setEducation] = useState<unknown>(null);
   const [personalStats, setPersonalStats] = useState<unknown>(null);
   const [profileSnapshots, setProfileSnapshots] = useState<ProfileSnapshot[]>(loadJson<ProfileSnapshot[]>("tornapps:profileSnapshots", []));
+  const [travelState, setTravelState] = useState<FetchState>("idle");
+  const [travelMessage, setTravelMessage] = useState("");
+  const [travelData, setTravelData] = useState<unknown>(null);
+  const [travelStateSnapshots, setTravelStateSnapshots] = useState<TravelStateSnapshot[]>(loadJson<TravelStateSnapshot[]>("tornapps:travelStateSnapshots", []));
+  const [travelPlans, setTravelPlans] = useState<SavedTravelPlan[]>(loadJson<SavedTravelPlan[]>("tornapps:travelPlans", []));
+  const [destinationId, setDestinationId] = useState(travelDestinations[0].id);
+  const [capacity, setCapacity] = useState(19);
+  const [buyPrice, setBuyPrice] = useState(0);
+  const [sellPrice, setSellPrice] = useState(0);
+  const [stayMinutes, setStayMinutes] = useState(0);
   const isEs = locale === "es";
   const names = useMemo(() => modules.map((module) => (isEs ? module.es : module.en)), [isEs]);
   const cooldownSummary = getCooldownSummaries(cooldowns);
   const barSummary = getBarSummaries(bars);
   const profileFacts = getProfileFacts(basicProfile, education, personalStats);
+  const selectedDestination = travelDestinations.find((destination) => destination.id === destinationId) ?? travelDestinations[0];
+  const travelMinutes = selectedDestination.minutesEachWay * 2 + stayMinutes;
+  const profitPerItem = sellPrice - buyPrice;
+  const profit = profitPerItem * capacity;
+  const profitPerHour = travelMinutes > 0 ? profit / (travelMinutes / 60) : 0;
 
   function toggleLocale() {
     const next = isEs ? "en" : "es";
@@ -336,6 +397,45 @@ function App() {
     setAuditEvents(addAudit("profile_refreshed", partial ? "Fetched profile with partial data" : "Fetched user/basic, user/education, and user/personalstats"));
   }
 
+  async function refreshTravelState() {
+    const storedKey = apiKey.trim() || localStorage.getItem("tornapps:apiKey") || "";
+    if (!storedKey) {
+      setTravelState("error");
+      setTravelMessage(isEs ? "Primero valida una API key Minimal o Custom." : "Validate a Minimal or Custom API key first.");
+      return;
+    }
+    setTravelState("loading");
+    setTravelMessage(isEs ? "Actualizando estado de viaje..." : "Refreshing travel state...");
+    try {
+      const travel = await fetchTorn("/user/travel", storedKey);
+      setTravelData(travel);
+      setTravelStateSnapshots(saveTravelStateSnapshot(travel));
+      setTravelState("success");
+      setTravelMessage(isEs ? "Estado de viaje actualizado." : "Travel state refreshed.");
+      setAuditEvents(addAudit("travel_state_refreshed", "Fetched user/travel"));
+    } catch (error) {
+      setTravelState("error");
+      setTravelMessage(error instanceof Error ? error.message : "Unknown travel state error.");
+      setAuditEvents(addAudit("travel_state_error", "Travel state refresh failed"));
+    }
+  }
+
+  function persistTravelPlan() {
+    const plan: SavedTravelPlan = {
+      id: crypto.randomUUID(),
+      time: new Date().toISOString(),
+      destination: selectedDestination.en,
+      capacity,
+      buyPrice,
+      sellPrice,
+      stayMinutes,
+      profit,
+      profitPerHour
+    };
+    setTravelPlans(saveTravelPlan(plan));
+    setAuditEvents(addAudit("travel_plan_saved", `Saved ${selectedDestination.en} plan`));
+  }
+
   async function enableNotifications() {
     if (!("Notification" in window)) {
       setCooldownMessage(isEs ? "Este navegador no soporta notificaciones." : "This browser does not support notifications.");
@@ -361,7 +461,7 @@ function App() {
     return <main className="lock"><section className="card lockcard"><div className="logo">TA</div><p className="eyebrow">{isEs ? "Asistente personal de Torn" : "Privacy-first Torn assistant"}</p><h1>{isEs ? "Desbloquear TornApps" : "Unlock TornApps"}</h1><p className="muted">{isEs ? "Bloqueo local del navegador. No uses tu contrasena de Torn." : "Local browser lock. Do not use your Torn password."}</p><input className="input" type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={isEs ? "Frase local" : "Local passphrase"} /><button className="primary" onClick={() => setUnlocked(passphrase.length >= 4)}>{isEs ? "Entrar" : "Enter"}</button><button className="ghost" onClick={toggleLocale}>{isEs ? "English" : "Espanol"}</button></section></main>;
   }
 
-  return <div className="shell"><aside><div className="brand"><div className="logo small">TA</div><div><strong>TornApps</strong><span>M3 profile</span></div></div><nav>{names.slice(0,5).map((name) => <a key={name} href={name === names[0] ? "#dashboard" : name === names[2] ? "#profile" : "#modules"}>{name}</a>)}</nav></aside><main className="content"><header><div><p className="eyebrow">{isEs ? "Privacidad primero" : "Privacy first"}</p><h1>{isEs ? "Centro de mando personal" : "Personal command center"}</h1><p className="muted">{isEs ? "M3 anade analisis de perfil con historial local de 30 dias." : "M3 adds profile analysis with 30-day local history."}</p></div><button className="ghost" onClick={toggleLocale}>{locale.toUpperCase()}</button></header><section id="dashboard" className="hero card"><div><h2>{isEs ? "Configurar API key" : "API key setup"}</h2><p>{isEs ? "La key se guarda solo en localStorage de este navegador. No hay backend ni servidor." : "The key is stored only in this browser localStorage. There is no backend or server storage."}</p><input className="input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={isEs ? "Pega tu Torn API key" : "Paste your Torn API key"} /><div className="buttonrow"><button className="primary inline" onClick={() => void validateKey()} disabled={keyState === "validating"}>{keyState === "validating" ? (isEs ? "Validando..." : "Validating...") : (isEs ? "Validar key" : "Validate key")}</button><button className="ghost" onClick={resetKey}>{isEs ? "Eliminar" : "Reset"}</button></div>{message ? <p className={`notice ${keyState}`}>{message}</p> : null}</div><div className="security card"><h3>{isEs ? "Estado de key" : "Key status"}</h3><p><strong>{isEs ? "Estado" : "Status"}:</strong> {keyState}</p><p><strong>{isEs ? "Acceso" : "Access"}:</strong> {keyMeta?.accessLevel || "Not validated"}</p><p><strong>{isEs ? "Validada" : "Validated"}:</strong> {keyMeta ? new Date(keyMeta.validatedAt).toLocaleString() : "-"}</p></div></section><section className="card cooldown-panel"><div className="section-head"><div><h2>{isEs ? "Cooldowns y barras" : "Cooldowns and bars"}</h2><p>{isEs ? "Energia, nerve, happy y cooldowns principales." : "Energy, nerve, happy, and major cooldowns."}</p></div><div className="buttonrow compact"><button className="primary inline" onClick={() => void refreshCooldowns()} disabled={cooldownState === "loading"}>{cooldownState === "loading" ? (isEs ? "Actualizando..." : "Refreshing...") : (isEs ? "Actualizar" : "Refresh")}</button><button className="ghost" onClick={() => void enableNotifications()}>{isEs ? "Notificaciones" : "Notifications"}</button></div></div>{cooldownMessage ? <p className={`notice ${cooldownState}`}>{cooldownMessage}</p> : null}<div className="next-action"><strong>{isEs ? "Siguiente accion:" : "Next action:"}</strong> {getNextAction(cooldowns, bars, isEs)}</div><div className="metric-grid"><div><h3>{isEs ? "Barras" : "Bars"}</h3>{barSummary.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : barSummary.map((bar) => <div className="metric" key={bar.name}><span>{bar.name}</span><strong>{bar.current ?? "?"} / {bar.maximum ?? "?"}</strong>{bar.tickTime ? <small>Tick: {formatSeconds(bar.tickTime)}</small> : null}</div>)}</div><div><h3>Cooldowns</h3>{cooldownSummary.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : cooldownSummary.map((cooldown) => <div className="metric" key={cooldown.name}><span>{cooldown.name}</span><strong>{formatSeconds(cooldown.seconds)}</strong></div>)}</div></div><details className="raw"><summary>{isEs ? "Datos raw" : "Raw data"}</summary><pre>{JSON.stringify({ cooldowns, bars }, null, 2)}</pre></details></section><section id="profile" className="card cooldown-panel"><div className="section-head"><div><h2>{isEs ? "Perfil" : "Profile"}</h2><p>{isEs ? "Perfil basico, educacion y personal stats populares." : "Basic profile, education, and popular personal stats."}</p></div><button className="primary inline" onClick={() => void refreshProfile()} disabled={profileState === "loading"}>{profileState === "loading" ? (isEs ? "Actualizando..." : "Refreshing...") : (isEs ? "Actualizar perfil" : "Refresh profile")}</button></div>{profileMessage ? <p className={`notice ${profileState}`}>{profileMessage}</p> : null}<div className="metric-grid"><div><h3>{isEs ? "Resumen" : "Summary"}</h3>{profileFacts.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : profileFacts.map((fact) => <div className="metric" key={fact.label}><span>{fact.label}</span><strong>{fact.value}</strong></div>)}</div><div><h3>{isEs ? "Historial" : "History"}</h3><p className="muted">{isEs ? `${profileSnapshots.length} snapshots de perfil guardados.` : `${profileSnapshots.length} profile snapshots stored.`}</p><p className="muted">{isEs ? "Se conserva un maximo de 30 dias en este navegador." : "Maximum 30 days retained in this browser."}</p></div></div><details className="raw"><summary>{isEs ? "Datos raw" : "Raw data"}</summary><pre>{JSON.stringify({ basicProfile, education, personalStats }, null, 2)}</pre></details></section><section id="modules" className="grid">{modules.map((module, index) => <article className="card module" key={module.en}><div className="row"><h3>{names[index]}</h3><span>{module.ready ? (isEs ? "Listo" : "Ready") : (isEs ? "Plan" : "Planned")}</span></div><p>{module.scopes}</p></article>)}</section><section className="card audit"><h2>{isEs ? "Historial local" : "Local history"}</h2><p>{isEs ? `${snapshots.length} snapshots de cooldowns guardados.` : `${snapshots.length} cooldown snapshots stored.`}</p><p>{isEs ? `${profileSnapshots.length} snapshots de perfil guardados.` : `${profileSnapshots.length} profile snapshots stored.`}</p>{auditEvents.length === 0 ? <p>{isEs ? "Sin eventos todavia." : "No events yet."}</p> : auditEvents.slice(0,5).map((event) => <p key={event.id}><strong>{event.type}</strong> · {new Date(event.time).toLocaleString()} · {event.message}</p>)}</section></main></div>;
+  return <div className="shell"><aside><div className="brand"><div className="logo small">TA</div><div><strong>TornApps</strong><span>M4 travel</span></div></div><nav>{names.slice(0,6).map((name) => <a key={name} href={name === names[0] ? "#dashboard" : name === names[2] ? "#profile" : name === names[3] ? "#travel" : "#modules"}>{name}</a>)}</nav></aside><main className="content"><header><div><p className="eyebrow">{isEs ? "Privacidad primero" : "Privacy first"}</p><h1>{isEs ? "Centro de mando personal" : "Personal command center"}</h1><p className="muted">{isEs ? "M4 anade planificador de viajes y estado user/travel." : "M4 adds the travel planner and user/travel state."}</p></div><button className="ghost" onClick={toggleLocale}>{locale.toUpperCase()}</button></header><section id="dashboard" className="hero card"><div><h2>{isEs ? "Configurar API key" : "API key setup"}</h2><p>{isEs ? "La key se guarda solo en localStorage de este navegador. No hay backend ni servidor." : "The key is stored only in this browser localStorage. There is no backend or server storage."}</p><input className="input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={isEs ? "Pega tu Torn API key" : "Paste your Torn API key"} /><div className="buttonrow"><button className="primary inline" onClick={() => void validateKey()} disabled={keyState === "validating"}>{keyState === "validating" ? (isEs ? "Validando..." : "Validating...") : (isEs ? "Validar key" : "Validate key")}</button><button className="ghost" onClick={resetKey}>{isEs ? "Eliminar" : "Reset"}</button></div>{message ? <p className={`notice ${keyState}`}>{message}</p> : null}</div><div className="security card"><h3>{isEs ? "Estado de key" : "Key status"}</h3><p><strong>{isEs ? "Estado" : "Status"}:</strong> {keyState}</p><p><strong>{isEs ? "Acceso" : "Access"}:</strong> {keyMeta?.accessLevel || "Not validated"}</p><p><strong>{isEs ? "Validada" : "Validated"}:</strong> {keyMeta ? new Date(keyMeta.validatedAt).toLocaleString() : "-"}</p></div></section><section className="card cooldown-panel"><div className="section-head"><div><h2>{isEs ? "Cooldowns y barras" : "Cooldowns and bars"}</h2><p>{isEs ? "Energia, nerve, happy y cooldowns principales." : "Energy, nerve, happy, and major cooldowns."}</p></div><div className="buttonrow compact"><button className="primary inline" onClick={() => void refreshCooldowns()} disabled={cooldownState === "loading"}>{cooldownState === "loading" ? (isEs ? "Actualizando..." : "Refreshing...") : (isEs ? "Actualizar" : "Refresh")}</button><button className="ghost" onClick={() => void enableNotifications()}>{isEs ? "Notificaciones" : "Notifications"}</button></div></div>{cooldownMessage ? <p className={`notice ${cooldownState}`}>{cooldownMessage}</p> : null}<div className="next-action"><strong>{isEs ? "Siguiente accion:" : "Next action:"}</strong> {getNextAction(cooldowns, bars, isEs)}</div><div className="metric-grid"><div><h3>{isEs ? "Barras" : "Bars"}</h3>{barSummary.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : barSummary.map((bar) => <div className="metric" key={bar.name}><span>{bar.name}</span><strong>{bar.current ?? "?"} / {bar.maximum ?? "?"}</strong>{bar.tickTime ? <small>Tick: {formatSeconds(bar.tickTime)}</small> : null}</div>)}</div><div><h3>Cooldowns</h3>{cooldownSummary.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : cooldownSummary.map((cooldown) => <div className="metric" key={cooldown.name}><span>{cooldown.name}</span><strong>{formatSeconds(cooldown.seconds)}</strong></div>)}</div></div><details className="raw"><summary>{isEs ? "Datos raw" : "Raw data"}</summary><pre>{JSON.stringify({ cooldowns, bars }, null, 2)}</pre></details></section><section id="profile" className="card cooldown-panel"><div className="section-head"><div><h2>{isEs ? "Perfil" : "Profile"}</h2><p>{isEs ? "Perfil basico, educacion y personal stats populares." : "Basic profile, education, and popular personal stats."}</p></div><button className="primary inline" onClick={() => void refreshProfile()} disabled={profileState === "loading"}>{profileState === "loading" ? (isEs ? "Actualizando..." : "Refreshing...") : (isEs ? "Actualizar perfil" : "Refresh profile")}</button></div>{profileMessage ? <p className={`notice ${profileState}`}>{profileMessage}</p> : null}<div className="metric-grid"><div><h3>{isEs ? "Resumen" : "Summary"}</h3>{profileFacts.length === 0 ? <p className="muted">{isEs ? "Sin datos todavia." : "No data yet."}</p> : profileFacts.map((fact) => <div className="metric" key={fact.label}><span>{fact.label}</span><strong>{fact.value}</strong></div>)}</div><div><h3>{isEs ? "Historial" : "History"}</h3><p className="muted">{isEs ? `${profileSnapshots.length} snapshots de perfil guardados.` : `${profileSnapshots.length} profile snapshots stored.`}</p><p className="muted">{isEs ? "Se conserva un maximo de 30 dias en este navegador." : "Maximum 30 days retained in this browser."}</p></div></div><details className="raw"><summary>{isEs ? "Datos raw" : "Raw data"}</summary><pre>{JSON.stringify({ basicProfile, education, personalStats }, null, 2)}</pre></details></section><section id="travel" className="card cooldown-panel"><div className="section-head"><div><h2>{isEs ? "Planificador de viajes" : "Travel planner"}</h2><p>{isEs ? "Modelo manual: introduce precios actuales y capacidad. M5 usara mercado publico." : "Manual model: enter current prices and capacity. M5 will add public market data."}</p></div><button className="primary inline" onClick={() => void refreshTravelState()} disabled={travelState === "loading"}>{travelState === "loading" ? (isEs ? "Actualizando..." : "Refreshing...") : (isEs ? "Estado viaje" : "Travel state")}</button></div>{travelMessage ? <p className={`notice ${travelState}`}>{travelMessage}</p> : null}<div className="metric-grid"><div><h3>{isEs ? "Calculadora" : "Calculator"}</h3><label className="field-label">{isEs ? "Destino" : "Destination"}</label><select className="input" value={destinationId} onChange={(event) => setDestinationId(event.target.value)}>{travelDestinations.map((destination) => <option key={destination.id} value={destination.id}>{isEs ? destination.es : destination.en} ({destination.minutesEachWay}m)</option>)}</select><label className="field-label">{isEs ? "Capacidad" : "Capacity"}</label><input className="input" type="number" value={capacity} onChange={(event) => setCapacity(Math.max(0, Number(event.target.value) || 0))} /><label className="field-label">{isEs ? "Precio compra por item" : "Buy price per item"}</label><input className="input" type="number" value={buyPrice} onChange={(event) => setBuyPrice(Math.max(0, Number(event.target.value) || 0))} /><label className="field-label">{isEs ? "Precio venta por item" : "Sell price per item"}</label><input className="input" type="number" value={sellPrice} onChange={(event) => setSellPrice(Math.max(0, Number(event.target.value) || 0))} /><label className="field-label">{isEs ? "Minutos extra estancia" : "Extra stay minutes"}</label><input className="input" type="number" value={stayMinutes} onChange={(event) => setStayMinutes(Math.max(0, Number(event.target.value) || 0))} /><div className="buttonrow"><button className="primary inline" onClick={persistTravelPlan}>{isEs ? "Guardar plan" : "Save plan"}</button></div></div><div><h3>{isEs ? "Resultado" : "Result"}</h3><div className="metric"><span>{isEs ? "Ruta" : "Route"}</span><strong>{isEs ? selectedDestination.es : selectedDestination.en}</strong><small>{isEs ? selectedDestination.noteEs : selectedDestination.noteEn}</small></div><div className="metric"><span>{isEs ? "Tiempo total" : "Total time"}</span><strong>{travelMinutes}m</strong></div><div className="metric"><span>{isEs ? "Margen por item" : "Margin per item"}</span><strong>{money(profitPerItem)}</strong></div><div className="metric"><span>{isEs ? "Beneficio viaje" : "Trip profit"}</span><strong>{money(profit)}</strong></div><div className="metric"><span>{isEs ? "Beneficio por hora" : "Profit per hour"}</span><strong>{money(profitPerHour)}</strong></div><div className="metric"><span>{isEs ? "Planes guardados" : "Saved plans"}</span><strong>{travelPlans.length}</strong></div><div className="metric"><span>{isEs ? "Snapshots estado" : "State snapshots"}</span><strong>{travelStateSnapshots.length}</strong></div></div></div><details className="raw"><summary>{isEs ? "Estado raw user/travel" : "Raw user/travel state"}</summary><pre>{JSON.stringify(travelData, null, 2)}</pre></details></section><section id="modules" className="grid">{modules.map((module, index) => <article className="card module" key={module.en}><div className="row"><h3>{names[index]}</h3><span>{module.ready ? (isEs ? "Listo" : "Ready") : (isEs ? "Plan" : "Planned")}</span></div><p>{module.scopes}</p></article>)}</section><section className="card audit"><h2>{isEs ? "Historial local" : "Local history"}</h2><p>{isEs ? `${snapshots.length} snapshots de cooldowns guardados.` : `${snapshots.length} cooldown snapshots stored.`}</p><p>{isEs ? `${profileSnapshots.length} snapshots de perfil guardados.` : `${profileSnapshots.length} profile snapshots stored.`}</p><p>{isEs ? `${travelPlans.length} planes de viaje guardados.` : `${travelPlans.length} travel plans stored.`}</p>{auditEvents.length === 0 ? <p>{isEs ? "Sin eventos todavia." : "No events yet."}</p> : auditEvents.slice(0,5).map((event) => <p key={event.id}><strong>{event.type}</strong> · {new Date(event.time).toLocaleString()} · {event.message}</p>)}</section></main></div>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
