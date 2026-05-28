@@ -1,1 +1,1 @@
-# placeholder
+# TornApps bootstrap placeholder
