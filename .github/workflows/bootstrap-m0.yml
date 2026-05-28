@@ -1,0 +1,1140 @@
+name: Bootstrap TornApps M0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate TornApps M0 files
+        run: |
+          set -euo pipefail
+
+          mkdir -p src/config src/data src/i18n src/lib src/styles .github/workflows
+
+          cat > package.json <<'EOF'
+          {
+            "name": "tornapps",
+            "private": true,
+            "version": "0.0.0",
+            "type": "module",
+            "scripts": {
+              "dev": "vite",
+              "build": "tsc -b && vite build",
+              "preview": "vite preview",
+              "typecheck": "tsc -b --pretty",
+              "test": "vitest run",
+              "test:watch": "vitest"
+            },
+            "dependencies": {
+              "@vitejs/plugin-react": "latest",
+              "vite": "latest",
+              "typescript": "latest",
+              "react": "latest",
+              "react-dom": "latest"
+            },
+            "devDependencies": {
+              "@types/react": "latest",
+              "@types/react-dom": "latest",
+              "autoprefixer": "^10.4.20",
+              "postcss": "^8.4.49",
+              "tailwindcss": "^3.4.17",
+              "vitest": "latest"
+            },
+            "engines": {
+              "node": ">=20.0.0"
+            }
+          }
+          EOF
+
+          cat > index.html <<'EOF'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="UTF-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              <meta name="description" content="TornApps privacy-first personal Torn assistant" />
+              <title>TornApps</title>
+            </head>
+            <body>
+              <div id="root"></div>
+              <script type="module" src="/src/main.tsx"></script>
+            </body>
+          </html>
+          EOF
+
+          cat > vite.config.ts <<'EOF'
+          /// <reference types="vitest" />
+          import { defineConfig } from "vite";
+          import react from "@vitejs/plugin-react";
+
+          export default defineConfig({
+            base: process.env.GITHUB_ACTIONS ? "/tornapps/" : "/",
+            plugins: [react()],
+            test: {
+              globals: true,
+              environment: "node"
+            }
+          });
+          EOF
+
+          cat > tsconfig.json <<'EOF'
+          {
+            "files": [],
+            "references": [
+              { "path": "./tsconfig.app.json" },
+              { "path": "./tsconfig.node.json" }
+            ]
+          }
+          EOF
+
+          cat > tsconfig.app.json <<'EOF'
+          {
+            "compilerOptions": {
+              "target": "ES2022",
+              "useDefineForClassFields": true,
+              "lib": ["ES2022", "DOM", "DOM.Iterable"],
+              "allowJs": false,
+              "skipLibCheck": true,
+              "esModuleInterop": true,
+              "allowSyntheticDefaultImports": true,
+              "strict": true,
+              "forceConsistentCasingInFileNames": true,
+              "module": "ESNext",
+              "moduleResolution": "Bundler",
+              "resolveJsonModule": true,
+              "isolatedModules": true,
+              "noEmit": true,
+              "jsx": "react-jsx",
+              "types": ["vite/client", "vitest/globals"]
+            },
+            "include": ["src"]
+          }
+          EOF
+
+          cat > tsconfig.node.json <<'EOF'
+          {
+            "compilerOptions": {
+              "composite": true,
+              "skipLibCheck": true,
+              "module": "ESNext",
+              "moduleResolution": "Bundler",
+              "allowSyntheticDefaultImports": true,
+              "strict": true
+            },
+            "include": ["vite.config.ts"]
+          }
+          EOF
+
+          cat > .gitignore <<'EOF'
+          node_modules
+          dist
+          .vite
+          coverage
+          .env
+          .env.*
+          !.env.example
+          .DS_Store
+          Thumbs.db
+          *.log
+          EOF
+
+          cat > src/main.tsx <<'EOF'
+          import React from "react";
+          import ReactDOM from "react-dom/client";
+          import App from "./App";
+          import "./styles/app.css";
+
+          ReactDOM.createRoot(document.getElementById("root")!).render(
+            <React.StrictMode>
+              <App />
+            </React.StrictMode>
+          );
+          EOF
+
+          cat > src/types.ts <<'EOF'
+          export type Locale = "en" | "es";
+
+          export type ModuleStatus = "ready" | "planned" | "locked";
+
+          export type TornModule = {
+            id: string;
+            titleKey: string;
+            descriptionKey: string;
+            status: ModuleStatus;
+            priority: number;
+            requiredScopes: string[];
+          };
+          EOF
+
+          cat > src/config/features.ts <<'EOF'
+          export const featureFlags = {
+            localUnlock: true,
+            bilingualUi: true,
+            dashboardShell: true,
+            apiKeySetup: false,
+            cooldowns: false,
+            profile: false,
+            travel: false,
+            market: false,
+            networth: false,
+            browserNotifications: false,
+            fullAccessKeyBlock: true,
+            factionWorkspace: false,
+            monetization: false
+          } as const;
+
+          export type FeatureFlag = keyof typeof featureFlags;
+
+          export function isFeatureEnabled(flag: FeatureFlag): boolean {
+            return featureFlags[flag];
+          }
+          EOF
+
+          cat > src/config/features.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { featureFlags, isFeatureEnabled } from "./features";
+
+          describe("feature flags", () => {
+            it("blocks full access keys by design", () => {
+              expect(featureFlags.fullAccessKeyBlock).toBe(true);
+            });
+
+            it("keeps faction workspace disabled for M0", () => {
+              expect(isFeatureEnabled("factionWorkspace")).toBe(false);
+            });
+          });
+          EOF
+
+          cat > src/lib/retention.ts <<'EOF'
+          export type TimedRecord = {
+            createdAt: string;
+          };
+
+          export function pruneOlderThanDays<T extends TimedRecord>(
+            records: T[],
+            days: number,
+            now = new Date()
+          ): T[] {
+            const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
+            return records.filter((record) => new Date(record.createdAt).getTime() >= cutoff);
+          }
+          EOF
+
+          cat > src/lib/retention.test.ts <<'EOF'
+          import { describe, expect, it } from "vitest";
+          import { pruneOlderThanDays } from "./retention";
+
+          describe("retention", () => {
+            it("keeps records inside the retention window", () => {
+              const now = new Date("2026-05-28T12:00:00Z");
+              const records = [
+                { createdAt: "2026-05-27T12:00:00Z", value: "keep" },
+                { createdAt: "2026-04-01T12:00:00Z", value: "drop" }
+              ];
+
+              expect(pruneOlderThanDays(records, 30, now)).toEqual([
+                { createdAt: "2026-05-27T12:00:00Z", value: "keep" }
+              ]);
+            });
+          });
+          EOF
+
+          cat > src/lib/localVault.ts <<'EOF'
+          const VAULT_HASH_KEY = "tornapps:vaultHash";
+
+          async function sha256(value: string): Promise<string> {
+            const data = new TextEncoder().encode(value);
+            const hash = await crypto.subtle.digest("SHA-256", data);
+            return Array.from(new Uint8Array(hash))
+              .map((byte) => byte.toString(16).padStart(2, "0"))
+              .join("");
+          }
+
+          export function hasLocalVault(): boolean {
+            return localStorage.getItem(VAULT_HASH_KEY) !== null;
+          }
+
+          export async function createLocalVault(passphrase: string): Promise<void> {
+            if (passphrase.trim().length < 8) {
+              throw new Error("Passphrase must be at least 8 characters.");
+            }
+            localStorage.setItem(VAULT_HASH_KEY, await sha256(passphrase));
+          }
+
+          export async function unlockLocalVault(passphrase: string): Promise<boolean> {
+            const storedHash = localStorage.getItem(VAULT_HASH_KEY);
+            if (!storedHash) return false;
+            return storedHash === (await sha256(passphrase));
+          }
+
+          export function resetLocalVault(): void {
+            localStorage.removeItem(VAULT_HASH_KEY);
+            localStorage.removeItem("tornapps:locale");
+          }
+          EOF
+
+          cat > src/data/modules.ts <<'EOF'
+          import type { TornModule } from "../types";
+
+          export const modules: TornModule[] = [
+            {
+              id: "overview",
+              titleKey: "module.overview.title",
+              descriptionKey: "module.overview.description",
+              status: "ready",
+              priority: 1,
+              requiredScopes: ["public"]
+            },
+            {
+              id: "cooldowns",
+              titleKey: "module.cooldowns.title",
+              descriptionKey: "module.cooldowns.description",
+              status: "planned",
+              priority: 2,
+              requiredScopes: ["minimal", "custom:user/cooldowns", "custom:user/bars"]
+            },
+            {
+              id: "profile",
+              titleKey: "module.profile.title",
+              descriptionKey: "module.profile.description",
+              status: "planned",
+              priority: 3,
+              requiredScopes: ["public", "minimal"]
+            },
+            {
+              id: "travel",
+              titleKey: "module.travel.title",
+              descriptionKey: "module.travel.description",
+              status: "planned",
+              priority: 4,
+              requiredScopes: ["public", "minimal"]
+            },
+            {
+              id: "market",
+              titleKey: "module.market.title",
+              descriptionKey: "module.market.description",
+              status: "planned",
+              priority: 5,
+              requiredScopes: ["public"]
+            },
+            {
+              id: "networth",
+              titleKey: "module.networth.title",
+              descriptionKey: "module.networth.description",
+              status: "planned",
+              priority: 6,
+              requiredScopes: ["limited", "custom:user/networth"]
+            },
+            {
+              id: "history",
+              titleKey: "module.history.title",
+              descriptionKey: "module.history.description",
+              status: "planned",
+              priority: 7,
+              requiredScopes: ["browser-storage"]
+            },
+            {
+              id: "settings",
+              titleKey: "module.settings.title",
+              descriptionKey: "module.settings.description",
+              status: "ready",
+              priority: 8,
+              requiredScopes: ["none"]
+            }
+          ];
+          EOF
+
+          cat > src/i18n/dictionaries.ts <<'EOF'
+          import type { Locale } from "../types";
+
+          type Dictionary = Record<string, string>;
+
+          const en: Dictionary = {
+            "app.name": "TornApps",
+            "app.tagline": "Privacy-first personal Torn assistant",
+            "lock.title": "Unlock TornApps",
+            "lock.subtitle": "Create or enter your local passphrase. This protects this browser only.",
+            "lock.passphrase": "Local passphrase",
+            "lock.create": "Create local vault",
+            "lock.unlock": "Unlock",
+            "lock.reset": "Reset local vault",
+            "lock.warning": "Do not reuse your Torn password. This is only a local browser lock.",
+            "dashboard.title": "Personal command center",
+            "dashboard.subtitle": "M0 shell today. API key validation, cooldowns, profile, travel, market, and networth come next.",
+            "dashboard.nextAction": "Next build action",
+            "dashboard.nextActionBody": "Build the API key setup screen, validate key/info, and block Full Access keys before any Torn data module goes live.",
+            "security.title": "Security posture",
+            "security.body": "Raw Torn API keys will stay in the browser. Full Access keys are blocked. Server storage is excluded from the MVP.",
+            "language.toggle": "Language",
+            "nav.dashboard": "Dashboard",
+            "nav.modules": "Modules",
+            "nav.settings": "Settings",
+            "status.ready": "Ready",
+            "status.planned": "Planned",
+            "status.locked": "Locked",
+            "module.overview.title": "Overview",
+            "module.overview.description": "High-level account summary and what-to-do-next panel.",
+            "module.cooldowns.title": "Cooldowns",
+            "module.cooldowns.description": "Energy, nerve, happy, drugs, medical, booster, travel state, and browser alerts while active.",
+            "module.profile.title": "Profile",
+            "module.profile.description": "Progress, public profile signals, education, and change tracking.",
+            "module.travel.title": "Travel",
+            "module.travel.description": "Destination comparison, capacity planning, profit per trip, and profit per hour.",
+            "module.market.title": "Market",
+            "module.market.description": "Item search, watchlists, price thresholds, saved searches, and local observations.",
+            "module.networth.title": "Networth",
+            "module.networth.description": "Breakdown, 30-day local history, change detection, and trend cards.",
+            "module.history.title": "History",
+            "module.history.description": "Local snapshots, audit events, assistant history, and 30-day retention.",
+            "module.settings.title": "Settings",
+            "module.settings.description": "Language, local vault, feature flags, data export, and deletion controls.",
+            "settings.title": "Settings preview",
+            "settings.body": "M0 stores only the local unlock hash and language preference. Torn API key storage is not implemented yet.",
+            "footer.milestone": "M0 static shell"
+          };
+
+          const es: Dictionary = {
+            "app.name": "TornApps",
+            "app.tagline": "Asistente personal de Torn centrado en privacidad",
+            "lock.title": "Desbloquear TornApps",
+            "lock.subtitle": "Crea o introduce tu frase local. Solo protege este navegador.",
+            "lock.passphrase": "Frase local",
+            "lock.create": "Crear caja local",
+            "lock.unlock": "Desbloquear",
+            "lock.reset": "Restablecer caja local",
+            "lock.warning": "No reutilices tu contrasena de Torn. Esto es solo un bloqueo local del navegador.",
+            "dashboard.title": "Centro de mando personal",
+            "dashboard.subtitle": "Hoy es la estructura M0. Despues vienen validacion de API key, cooldowns, perfil, viajes, mercado y networth.",
+            "dashboard.nextAction": "Siguiente accion de desarrollo",
+            "dashboard.nextActionBody": "Crear la pantalla de API key, validar key/info y bloquear Full Access antes de activar modulos con datos de Torn.",
+            "security.title": "Postura de seguridad",
+            "security.body": "Las API keys de Torn se quedaran en el navegador. Las keys Full Access se bloquean. El MVP no guarda keys en servidor.",
+            "language.toggle": "Idioma",
+            "nav.dashboard": "Panel",
+            "nav.modules": "Modulos",
+            "nav.settings": "Ajustes",
+            "status.ready": "Listo",
+            "status.planned": "Planificado",
+            "status.locked": "Bloqueado",
+            "module.overview.title": "Resumen",
+            "module.overview.description": "Resumen de cuenta y panel de siguiente accion.",
+            "module.cooldowns.title": "Cooldowns",
+            "module.cooldowns.description": "Energia, nerve, happy, drogas, medico, booster, viaje y alertas del navegador con la app abierta.",
+            "module.profile.title": "Perfil",
+            "module.profile.description": "Progreso, senales publicas, educacion y seguimiento de cambios.",
+            "module.travel.title": "Viajes",
+            "module.travel.description": "Comparacion de destinos, capacidad, beneficio por viaje y beneficio por hora.",
+            "module.market.title": "Mercado",
+            "module.market.description": "Busqueda de items, watchlists, umbrales de precio, busquedas guardadas y observaciones locales.",
+            "module.networth.title": "Networth",
+            "module.networth.description": "Desglose, historial local de 30 dias, deteccion de cambios y tendencias.",
+            "module.history.title": "Historial",
+            "module.history.description": "Snapshots locales, auditoria, historial del asistente y retencion de 30 dias.",
+            "module.settings.title": "Ajustes",
+            "module.settings.description": "Idioma, caja local, feature flags, exportacion y borrado de datos.",
+            "settings.title": "Vista previa de ajustes",
+            "settings.body": "M0 solo guarda el hash local y el idioma. El guardado de API key de Torn aun no esta implementado.",
+            "footer.milestone": "Shell estatico M0"
+          };
+
+          const dictionaries: Record<Locale, Dictionary> = { en, es };
+
+          export function translate(locale: Locale, key: string): string {
+            return dictionaries[locale][key] ?? dictionaries.en[key] ?? key;
+          }
+          EOF
+
+          cat > src/App.tsx <<'EOF'
+          import { useMemo, useState } from "react";
+          import type { Locale } from "./types";
+          import { modules } from "./data/modules";
+          import { translate } from "./i18n/dictionaries";
+          import {
+            createLocalVault,
+            hasLocalVault,
+            resetLocalVault,
+            unlockLocalVault
+          } from "./lib/localVault";
+
+          function getInitialLocale(): Locale {
+            const stored = localStorage.getItem("tornapps:locale");
+            return stored === "es" ? "es" : "en";
+          }
+
+          function StatusBadge({ status, t }: { status: string; t: (key: string) => string }) {
+            return <span className={`status status-${status}`}>{t(`status.${status}`)}</span>;
+          }
+
+          function UnlockScreen({
+            locale,
+            setLocale,
+            onUnlocked
+          }: {
+            locale: Locale;
+            setLocale: (locale: Locale) => void;
+            onUnlocked: () => void;
+          }) {
+            const t = (key: string) => translate(locale, key);
+            const [passphrase, setPassphrase] = useState("");
+            const [error, setError] = useState<string | null>(null);
+            const vaultExists = hasLocalVault();
+
+            async function submit() {
+              setError(null);
+              try {
+                if (vaultExists) {
+                  const ok = await unlockLocalVault(passphrase);
+                  if (!ok) {
+                    setError("Invalid local passphrase.");
+                    return;
+                  }
+                } else {
+                  await createLocalVault(passphrase);
+                }
+                onUnlocked();
+              } catch (err) {
+                setError(err instanceof Error ? err.message : "Unexpected error.");
+              }
+            }
+
+            return (
+              <main className="lock-page">
+                <section className="lock-card">
+                  <div className="brand-mark">TA</div>
+                  <p className="eyebrow">{t("app.tagline")}</p>
+                  <h1>{t("lock.title")}</h1>
+                  <p className="muted">{t("lock.subtitle")}</p>
+
+                  <label className="field-label" htmlFor="passphrase">
+                    {t("lock.passphrase")}
+                  </label>
+                  <input
+                    id="passphrase"
+                    className="input"
+                    type="password"
+                    value={passphrase}
+                    onChange={(event) => setPassphrase(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void submit();
+                    }}
+                  />
+
+                  {error ? <p className="error">{error}</p> : null}
+
+                  <button className="primary-button" onClick={() => void submit()}>
+                    {vaultExists ? t("lock.unlock") : t("lock.create")}
+                  </button>
+
+                  <div className="lock-actions">
+                    <button className="ghost-button" onClick={() => setLocale(locale === "en" ? "es" : "en")}>
+                      {locale.toUpperCase()}
+                    </button>
+                    <button
+                      className="ghost-button"
+                      onClick={() => {
+                        resetLocalVault();
+                        setPassphrase("");
+                      }}
+                    >
+                      {t("lock.reset")}
+                    </button>
+                  </div>
+
+                  <p className="warning">{t("lock.warning")}</p>
+                </section>
+              </main>
+            );
+          }
+
+          function Dashboard({
+            locale,
+            setLocale,
+            onLock
+          }: {
+            locale: Locale;
+            setLocale: (locale: Locale) => void;
+            onLock: () => void;
+          }) {
+            const t = (key: string) => translate(locale, key);
+            const sortedModules = useMemo(() => [...modules].sort((a, b) => a.priority - b.priority), []);
+
+            return (
+              <div className="app-shell">
+                <aside className="sidebar">
+                  <div className="sidebar-brand">
+                    <div className="brand-mark small">TA</div>
+                    <div>
+                      <strong>{t("app.name")}</strong>
+                      <span>{t("footer.milestone")}</span>
+                    </div>
+                  </div>
+
+                  <nav className="nav-list">
+                    <a href="#dashboard">{t("nav.dashboard")}</a>
+                    <a href="#modules">{t("nav.modules")}</a>
+                    <a href="#settings">{t("nav.settings")}</a>
+                  </nav>
+                </aside>
+
+                <main className="main-panel">
+                  <header className="topbar">
+                    <div>
+                      <p className="eyebrow">{t("app.tagline")}</p>
+                      <h1>{t("dashboard.title")}</h1>
+                      <p className="muted">{t("dashboard.subtitle")}</p>
+                    </div>
+                    <div className="topbar-actions">
+                      <button className="ghost-button" onClick={() => setLocale(locale === "en" ? "es" : "en")}>
+                        {t("language.toggle")}: {locale.toUpperCase()}
+                      </button>
+                      <button className="ghost-button" onClick={onLock}>
+                        Lock
+                      </button>
+                    </div>
+                  </header>
+
+                  <section id="dashboard" className="hero-card">
+                    <div>
+                      <h2>{t("dashboard.nextAction")}</h2>
+                      <p>{t("dashboard.nextActionBody")}</p>
+                    </div>
+
+                    <div className="security-card">
+                      <h3>{t("security.title")}</h3>
+                      <p>{t("security.body")}</p>
+                    </div>
+                  </section>
+
+                  <section id="modules" className="module-grid">
+                    {sortedModules.map((module) => (
+                      <article key={module.id} className="module-card">
+                        <div className="module-card-header">
+                          <h3>{t(module.titleKey)}</h3>
+                          <StatusBadge status={module.status} t={t} />
+                        </div>
+                        <p>{t(module.descriptionKey)}</p>
+                        <div className="scope-list">
+                          {module.requiredScopes.map((scope) => (
+                            <span key={scope}>{scope}</span>
+                          ))}
+                        </div>
+                      </article>
+                    ))}
+                  </section>
+
+                  <section id="settings" className="settings-card">
+                    <h2>{t("settings.title")}</h2>
+                    <p>{t("settings.body")}</p>
+                  </section>
+                </main>
+              </div>
+            );
+          }
+
+          export default function App() {
+            const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
+            const [unlocked, setUnlocked] = useState(false);
+
+            function setLocale(locale: Locale) {
+              localStorage.setItem("tornapps:locale", locale);
+              setLocaleState(locale);
+            }
+
+            if (!unlocked) {
+              return <UnlockScreen locale={locale} setLocale={setLocale} onUnlocked={() => setUnlocked(true)} />;
+            }
+
+            return <Dashboard locale={locale} setLocale={setLocale} onLock={() => setUnlocked(false)} />;
+          }
+          EOF
+
+          cat > src/styles/app.css <<'EOF'
+          :root {
+            color-scheme: dark;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #070b12;
+            color: #e6edf7;
+          }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            min-width: 320px;
+            min-height: 100vh;
+            background:
+              radial-gradient(circle at top left, rgba(79, 140, 255, 0.18), transparent 34rem),
+              radial-gradient(circle at bottom right, rgba(69, 212, 131, 0.10), transparent 30rem),
+              #070b12;
+          }
+
+          button,
+          input {
+            font: inherit;
+          }
+
+          .lock-page {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 1rem;
+          }
+
+          .lock-card,
+          .hero-card,
+          .module-card,
+          .settings-card,
+          .security-card {
+            border: 1px solid #233047;
+            background: rgba(13, 20, 32, 0.88);
+            box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+            backdrop-filter: blur(16px);
+          }
+
+          .lock-card {
+            width: min(100%, 30rem);
+            border-radius: 1.4rem;
+            padding: 2rem;
+          }
+
+          .brand-mark {
+            width: 3.2rem;
+            height: 3.2rem;
+            display: grid;
+            place-items: center;
+            border-radius: 1rem;
+            background: linear-gradient(135deg, #4f8cff, #45d483);
+            color: #06101d;
+            font-weight: 900;
+            letter-spacing: -0.05em;
+            margin-bottom: 1rem;
+          }
+
+          .brand-mark.small {
+            width: 2.4rem;
+            height: 2.4rem;
+            margin-bottom: 0;
+            border-radius: 0.75rem;
+          }
+
+          .eyebrow {
+            margin: 0 0 0.5rem;
+            color: #8ea0ba;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            font-size: 0.74rem;
+            font-weight: 700;
+          }
+
+          h1,
+          h2,
+          h3,
+          p {
+            margin-top: 0;
+          }
+
+          h1 {
+            margin-bottom: 0.6rem;
+            font-size: clamp(2rem, 4vw, 3.5rem);
+            letter-spacing: -0.06em;
+          }
+
+          h2 {
+            margin-bottom: 0.65rem;
+            font-size: 1.25rem;
+          }
+
+          h3 {
+            margin-bottom: 0;
+            font-size: 1rem;
+          }
+
+          .muted,
+          .module-card p,
+          .settings-card p,
+          .security-card p,
+          .hero-card p {
+            color: #a7b4c7;
+            line-height: 1.6;
+          }
+
+          .field-label {
+            display: block;
+            margin: 1.4rem 0 0.45rem;
+            color: #d6e1f0;
+            font-weight: 700;
+            font-size: 0.9rem;
+          }
+
+          .input {
+            width: 100%;
+            border: 1px solid #233047;
+            background: #070b12;
+            color: #e6edf7;
+            border-radius: 0.85rem;
+            padding: 0.85rem 0.95rem;
+            outline: none;
+          }
+
+          .input:focus {
+            border-color: #4f8cff;
+            box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
+          }
+
+          .primary-button,
+          .ghost-button {
+            border: 0;
+            cursor: pointer;
+            border-radius: 0.85rem;
+            padding: 0.8rem 1rem;
+            font-weight: 800;
+          }
+
+          .primary-button {
+            width: 100%;
+            margin-top: 1rem;
+            background: #4f8cff;
+            color: white;
+          }
+
+          .ghost-button {
+            background: rgba(255, 255, 255, 0.06);
+            color: #d6e1f0;
+            border: 1px solid #233047;
+          }
+
+          .lock-actions,
+          .topbar-actions {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+          }
+
+          .lock-actions {
+            margin-top: 0.85rem;
+          }
+
+          .error {
+            margin: 0.8rem 0 0;
+            color: #ff6b6b;
+          }
+
+          .warning {
+            margin: 1rem 0 0;
+            color: #f5b84b;
+            font-size: 0.88rem;
+            line-height: 1.5;
+          }
+
+          .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: 17rem 1fr;
+          }
+
+          .sidebar {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 1rem;
+            border-right: 1px solid #172238;
+            background: rgba(7, 11, 18, 0.72);
+            backdrop-filter: blur(14px);
+          }
+
+          .sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 2rem;
+          }
+
+          .sidebar-brand span {
+            display: block;
+            color: #8ea0ba;
+            font-size: 0.78rem;
+          }
+
+          .nav-list {
+            display: grid;
+            gap: 0.5rem;
+          }
+
+          .nav-list a {
+            color: #d6e1f0;
+            text-decoration: none;
+            padding: 0.75rem 0.9rem;
+            border-radius: 0.85rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid transparent;
+          }
+
+          .nav-list a:hover {
+            border-color: #233047;
+            background: rgba(255, 255, 255, 0.06);
+          }
+
+          .main-panel {
+            padding: 1.25rem;
+          }
+
+          .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
+            margin-bottom: 1.25rem;
+          }
+
+          .hero-card {
+            display: grid;
+            grid-template-columns: 1fr 24rem;
+            gap: 1rem;
+            border-radius: 1.25rem;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+          }
+
+          .security-card {
+            border-radius: 1rem;
+            padding: 1rem;
+            background: rgba(18, 27, 42, 0.9);
+          }
+
+          .module-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1rem;
+          }
+
+          .module-card,
+          .settings-card {
+            border-radius: 1.1rem;
+            padding: 1rem;
+          }
+
+          .module-card-header {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            align-items: center;
+            margin-bottom: 0.8rem;
+          }
+
+          .status {
+            flex: 0 0 auto;
+            border-radius: 999px;
+            padding: 0.25rem 0.55rem;
+            font-size: 0.72rem;
+            font-weight: 900;
+          }
+
+          .status-ready {
+            color: #06101d;
+            background: #45d483;
+          }
+
+          .status-planned {
+            color: #06101d;
+            background: #f5b84b;
+          }
+
+          .status-locked {
+            color: #06101d;
+            background: #ff6b6b;
+          }
+
+          .scope-list {
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+          }
+
+          .scope-list span {
+            border: 1px solid #233047;
+            background: rgba(255, 255, 255, 0.04);
+            color: #a7b4c7;
+            border-radius: 999px;
+            padding: 0.25rem 0.55rem;
+            font-size: 0.72rem;
+          }
+
+          .settings-card {
+            margin-top: 1rem;
+          }
+
+          @media (max-width: 1100px) {
+            .module-grid {
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .hero-card {
+              grid-template-columns: 1fr;
+            }
+          }
+
+          @media (max-width: 760px) {
+            .app-shell {
+              grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+              position: static;
+              height: auto;
+              border-right: 0;
+              border-bottom: 1px solid #172238;
+            }
+
+            .nav-list {
+              grid-template-columns: repeat(3, 1fr);
+            }
+
+            .topbar {
+              flex-direction: column;
+            }
+
+            .module-grid {
+              grid-template-columns: 1fr;
+            }
+          }
+          EOF
+
+          cat > README.md <<'EOF'
+          # TornApps
+
+          TornApps is a privacy-first personal Torn assistant. The first build is a static browser application designed for GitHub Pages and local development.
+
+          ## MVP direction
+
+          - Personal use first.
+          - Browser-side Torn API key handling.
+          - No Full Access keys.
+          - No server-side key storage.
+          - Responsive dark UI.
+          - English and Spanish interface.
+          - 30-day local history planned through browser storage.
+
+          ## Current milestone
+
+          `M0` creates the application shell:
+
+          - Vite + React + TypeScript
+          - Local unlock screen
+          - Dashboard layout
+          - Bilingual copy
+          - Feature flags
+          - Placeholder modules
+          - GitHub Pages deployment workflow
+
+          ## Local setup
+
+          ```powershell
+          npm install -g pnpm
+          pnpm install
+          pnpm dev
+          ```
+
+          ## Build and test
+
+          ```powershell
+          pnpm typecheck
+          pnpm test
+          pnpm build
+          ```
+
+          ## Security notes
+
+          Never commit Torn API keys, passwords, `.env` files, or secrets. TornApps is designed so the raw Torn API key stays in the browser. The local unlock screen protects the local UI state; it is not a substitute for real server-side authentication.
+          EOF
+
+          cat > .github/workflows/deploy.yml <<'EOF'
+          name: Deploy TornApps to GitHub Pages
+
+          on:
+            push:
+              branches: ["main"]
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+            pages: write
+            id-token: write
+
+          concurrency:
+            group: "pages"
+            cancel-in-progress: false
+
+          jobs:
+            build:
+              runs-on: ubuntu-latest
+              steps:
+                - name: Checkout
+                  uses: actions/checkout@v4
+
+                - name: Setup pnpm
+                  uses: pnpm/action-setup@v4
+                  with:
+                    version: 9
+
+                - name: Setup Node
+                  uses: actions/setup-node@v4
+                  with:
+                    node-version: 20
+                    cache: pnpm
+
+                - name: Install dependencies
+                  run: pnpm install --frozen-lockfile=false
+
+                - name: Typecheck
+                  run: pnpm typecheck
+
+                - name: Test
+                  run: pnpm test
+
+                - name: Build
+                  run: pnpm build
+
+                - name: Setup Pages
+                  uses: actions/configure-pages@v5
+
+                - name: Upload artifact
+                  uses: actions/upload-pages-artifact@v3
+                  with:
+                    path: ./dist
+
+            deploy:
+              environment:
+                name: github-pages
+                url: ${{ steps.deployment.outputs.page_url }}
+              runs-on: ubuntu-latest
+              needs: build
+              steps:
+                - name: Deploy to GitHub Pages
+                  id: deployment
+                  uses: actions/deploy-pages@v4
+          EOF
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "M0: initialize TornApps static shell"
+            git push
+          fi
