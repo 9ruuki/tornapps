@@ -1,106 +1,43 @@
-name: Bootstrap TornApps M0
+name: Deploy TornApps
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
-  bootstrap:
+  build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
 
-      - name: Configure Git author
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Generate app files
-        run: |
-          set -euo pipefail
-          mkdir -p src
-
-          cat > package.json <<'EOF'
-          {"name":"tornapps","private":true,"version":"0.0.0","type":"module","scripts":{"dev":"vite","build":"tsc -b && vite build","preview":"vite preview","typecheck":"tsc -b --pretty","test":"echo no-tests-yet"},"dependencies":{"@vitejs/plugin-react":"latest","vite":"latest","typescript":"latest","react":"latest","react-dom":"latest"},"devDependencies":{"@types/react":"latest","@types/react-dom":"latest"},"engines":{"node":">=20.0.0"}}
-          EOF
-          sed -i 's/^          //' package.json
-
-          cat > index.html <<'EOF'
-          <!doctype html>
-          <html lang="en">
-            <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>TornApps</title></head>
-            <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
-          </html>
-          EOF
-          sed -i 's/^          //' index.html
-
-          cat > tsconfig.json <<'EOF'
-          {"compilerOptions":{"target":"ES2022","useDefineForClassFields":true,"lib":["ES2022","DOM","DOM.Iterable"],"allowJs":false,"skipLibCheck":true,"esModuleInterop":true,"allowSyntheticDefaultImports":true,"strict":true,"forceConsistentCasingInFileNames":true,"module":"ESNext","moduleResolution":"Bundler","resolveJsonModule":true,"isolatedModules":true,"noEmit":true,"jsx":"react-jsx","types":["vite/client"]},"include":["src","vite.config.ts"]}
-          EOF
-          sed -i 's/^          //' tsconfig.json
-
-          cat > vite.config.ts <<'EOF'
-          import { defineConfig } from "vite";
-          import react from "@vitejs/plugin-react";
-          export default defineConfig({ base: process.env.GITHUB_ACTIONS ? "/tornapps/" : "/", plugins: [react()] });
-          EOF
-          sed -i 's/^          //' vite.config.ts
-
-          cat > src/main.tsx <<'EOF'
-          import React, { useState } from "react";
-          import ReactDOM from "react-dom/client";
-          import "./style.css";
-
-          const modules = ["Overview", "Cooldowns", "Profile", "Travel", "Market", "Networth", "History", "Settings"];
-          const esModules = ["Resumen", "Cooldowns", "Perfil", "Viajes", "Mercado", "Networth", "Historial", "Ajustes"];
-
-          function App() {
-            const [locale, setLocale] = useState(localStorage.getItem("tornapps:locale") || "en");
-            const [unlocked, setUnlocked] = useState(false);
-            const [passphrase, setPassphrase] = useState("");
-            const isEs = locale === "es";
-            const names = isEs ? esModules : modules;
-
-            function toggleLocale() {
-              const next = isEs ? "en" : "es";
-              localStorage.setItem("tornapps:locale", next);
-              setLocale(next);
-            }
-
-            if (!unlocked) {
-              return <main className="lock"><section className="card lockcard"><div className="logo">TA</div><p className="eyebrow">{isEs ? "Asistente personal de Torn" : "Privacy-first Torn assistant"}</p><h1>{isEs ? "Desbloquear TornApps" : "Unlock TornApps"}</h1><p className="muted">{isEs ? "Bloqueo local del navegador. No uses tu contrasena de Torn." : "Local browser lock. Do not use your Torn password."}</p><input className="input" type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} placeholder={isEs ? "Frase local" : "Local passphrase"} /><button className="primary" onClick={() => setUnlocked(passphrase.length >= 4)}>{isEs ? "Entrar" : "Enter"}</button><button className="ghost" onClick={toggleLocale}>{isEs ? "English" : "Espanol"}</button></section></main>;
-            }
-
-            return <div className="shell"><aside><div className="brand"><div className="logo small">TA</div><div><strong>TornApps</strong><span>M0 static shell</span></div></div><nav>{names.slice(0,3).map((name) => <a key={name} href="#modules">{name}</a>)}</nav></aside><main className="content"><header><div><p className="eyebrow">{isEs ? "Privacidad primero" : "Privacy first"}</p><h1>{isEs ? "Centro de mando personal" : "Personal command center"}</h1><p className="muted">{isEs ? "Shell inicial. Lo siguiente es validar API key y bloquear Full Access." : "Initial shell. Next step is API key validation and Full Access blocking."}</p></div><button className="ghost" onClick={toggleLocale}>{locale.toUpperCase()}</button></header><section className="hero card"><h2>{isEs ? "Siguiente accion" : "Next action"}</h2><p>{isEs ? "Construir pantalla de API key, key/info y deteccion de permisos." : "Build API key screen, key/info validation, and scope detection."}</p></section><section id="modules" className="grid">{names.map((name, index) => <article className="card module" key={name}><div className="row"><h3>{name}</h3><span>{index === 0 || index === 7 ? (isEs ? "Listo" : "Ready") : (isEs ? "Plan" : "Planned")}</span></div><p>{isEs ? "Modulo preparado para la siguiente fase." : "Module placeholder ready for the next phase."}</p></article>)}</section></main></div>;
-          }
-
-          ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
-          EOF
-          sed -i 's/^          //' src/main.tsx
-
-          cat > src/style.css <<'EOF'
-          :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#e6edf7;background:#070b12;color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-width:320px;min-height:100vh;background:radial-gradient(circle at top left,rgba(79,140,255,.2),transparent 34rem),#070b12}button,input{font:inherit}.lock{min-height:100vh;display:grid;place-items:center;padding:1rem}.card{border:1px solid #233047;background:rgba(13,20,32,.9);box-shadow:0 18px 60px rgba(0,0,0,.35)}.lockcard{width:min(100%,30rem);border-radius:1.4rem;padding:2rem}.logo{width:3.2rem;height:3.2rem;display:grid;place-items:center;border-radius:1rem;background:linear-gradient(135deg,#4f8cff,#45d483);color:#06101d;font-weight:900;margin-bottom:1rem}.small{width:2.4rem;height:2.4rem;margin:0}.eyebrow{margin:0 0 .5rem;color:#8ea0ba;text-transform:uppercase;letter-spacing:.12em;font-size:.74rem;font-weight:700}h1{font-size:clamp(2rem,4vw,3.5rem);letter-spacing:-.06em;margin:.2rem 0 .8rem}.muted,.card p{color:#a7b4c7;line-height:1.6}.input{width:100%;border:1px solid #233047;background:#070b12;color:#e6edf7;border-radius:.85rem;padding:.85rem .95rem;margin-top:1rem}.primary,.ghost{border-radius:.85rem;padding:.8rem 1rem;font-weight:800;cursor:pointer}.primary{width:100%;margin-top:1rem;border:0;background:#4f8cff;color:white}.ghost{margin-top:.75rem;background:rgba(255,255,255,.06);color:#d6e1f0;border:1px solid #233047}.shell{min-height:100vh;display:grid;grid-template-columns:17rem 1fr}aside{padding:1rem;border-right:1px solid #172238;background:rgba(7,11,18,.72)}.brand{display:flex;align-items:center;gap:.75rem;margin-bottom:2rem}.brand span{display:block;color:#8ea0ba;font-size:.78rem}nav{display:grid;gap:.5rem}nav a{color:#d6e1f0;text-decoration:none;padding:.75rem .9rem;border-radius:.85rem;background:rgba(255,255,255,.03)}.content{padding:1.25rem}header{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start}.hero{border-radius:1.25rem;padding:1.25rem;margin:1rem 0}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem}.module{border-radius:1.1rem;padding:1rem}.row{display:flex;justify-content:space-between;gap:1rem;align-items:center}.row span{border-radius:999px;padding:.25rem .55rem;font-size:.72rem;font-weight:900;background:#f5b84b;color:#06101d}@media(max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.shell{grid-template-columns:1fr}aside{border-right:0;border-bottom:1px solid #172238}.grid{grid-template-columns:1fr}header{flex-direction:column}}
-          EOF
-          sed -i 's/^          //' src/style.css
-
-          cat > README.md <<'EOF'
-          # TornApps
-
-          Privacy-first personal Torn assistant. M0 is a static browser app shell for GitHub Pages.
-
-          ## Security
-
-          Do not commit Torn API keys or secrets. The MVP keeps Torn API keys in the browser.
-          EOF
-          sed -i 's/^          //' README.md
-
-          git add package.json index.html tsconfig.json vite.config.ts src/main.tsx src/style.css README.md
-          if git diff --cached --quiet; then
-            echo "No app file changes to commit."
-          else
-            git commit -m "M0: initialize TornApps static shell"
-            git push
-          fi
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: github-pages
+    steps:
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
